@@ -1,53 +1,59 @@
-async function scheduleHtmlProvider() {
+async function scheduleHtmlProvider(iframeContent = "", frameContent = "", dom = document) {
   await loadTool('AIScheduleTools');
+  
   // 定义通用的错误信息
-  const ERROR_INVALID_YEAR = '请输入正确的学年';
-  const ERROR_INVALID_TERM = '请输入正确的学期';
-  const ERROR_NETWORK = '网络请求失败，请检查网络连接';
+  const ERROR_INVALID_TERM = '获取学年学期数据失败，请检查网络连接,或在其他地点已登录';
+  const ERROR_NETWORK = '网络请求失败，请检查网络连接,或在其他地点已登录';
+  const ERROR_START_DATE = '获取开学日期失败，请检查网络连接,或者在其他地点已登录';
   const DOMAIN = 'jwgl.suse.edu.cn';
   const IP = '219.221.176.145';
 
-  // 提取通用的验证函数
-  function validateYear(value) {
-    const v = parseInt(value, 10); // 显式指定基数为10
-    if (isNaN(v) || v < 2000 || v > 2100) {
-      return ERROR_INVALID_YEAR;
-    }
-    return false; // 表示验证通过
+  // 提取学年和学期
+  const termData = dom.querySelector('#kbgrid_table_0 > tbody > tr:nth-child(1) > td > div.timetable_title > h6.pull-left');
+  if (!termData) {
+    await AIScheduleAlert(ERROR_INVALID_TERM);
+    return 'do not continue';
   }
-
-  function validateTerm(value) {
-    if (value !== '3' && value !== '12' && value !== '16') {
-      return ERROR_INVALID_TERM;
-    }
-    return false; // 表示验证通过
+  console.log(termData.textContent);
+  
+  const yearMatch = termData.textContent.match(/\d{4}/);
+  const termMatch = termData.textContent.match(/第(\d)学期/);
+  
+  if (!yearMatch || !termMatch) {
+    await AIScheduleAlert(ERROR_INVALID_TERM);
+    return 'do not continue';
   }
+  
+  const year = yearMatch[0];
+  let term = termMatch[1];
+  
+  console.log(`学年: ${year}, 学期: ${term}`);
+  
+  // 学期1 对应 3 ，学期2 对应 12 ，学期3 对应 16 用map映射
+  const termMap = {
+    '1': '3',
+    '2': '12',
+    '3': '16'
+  };
 
-  // 获取学年
-  const year = await AISchedulePrompt({
-    titleText: '学年',
-    tipText: '输入本学年开始的年份',
-    defaultText: '2024',
-    validator: validateYear
-  });
+  term = termMap[term] || null;
+  
+  if (!term) {
+    await AIScheduleAlert(ERROR_INVALID_TERM);
+    return 'do not continue';
+  }
+  
+  console.log(`学期: ${term}`);
 
-  // 获取学期
-  const term = await AISchedulePrompt({
-    titleText: '学期',
-    tipText: '输入本学期的学期(3,12,16 分别表示上、下、短学期)',
-    defaultText: '3',
-    validator: validateTerm
-  });
-
+  // 提取开学日期
   function extractStartDate(scheduleInfo) {
-    // 定义正则表达式，匹配括号内的日期范围
     const dateRangeRegex = /\((\d{4}-\d{2}-\d{2})至\d{4}-\d{2}-\d{2}\)/;
     const match = scheduleInfo.match(dateRangeRegex);
     if (match && match[1]) {
       console.log('开学时间：', match[1]);
-      return match[1]; // 返回开学时间
+      return match[1];
     }
-    return null; // 如果未匹配到，返回null
+    return null;
   }
 
   // 使用Fetch请求教务的接口
@@ -64,6 +70,7 @@ async function scheduleHtmlProvider() {
           "X-Requested-With": "XMLHttpRequest"
         },
       });
+      
       const semesterData = await fetch(`${baseURL}/xtgl/index_cxAreaSix.html?localeKey=zh_CN&gnmkdm=index`, {
         "headers": {
           "x-requested-with": "XMLHttpRequest"
@@ -73,18 +80,21 @@ async function scheduleHtmlProvider() {
         "mode": "cors",
         "credentials": "include"
       });
+      
       const semesterInfo = await semesterData.text();
       const startDate = extractStartDate(semesterInfo);
+      
       if (!startDate) {
-        await AIScheduleAlert('获取开学日期失败，请检查网络连接');
+        await AIScheduleAlert(ERROR_START_DATE);
         return 'do not continue';
       }
+      
       const startDateTimestamp = new Date(startDate).getTime().toString();
       console.log(`startDateTimestamp: ${startDateTimestamp}`);
+
       if (res.ok) {
         const data = await res.json();
         if (data.kbList) {
-
           const result = {
             startDate: startDateTimestamp,
             kbList: data.kbList
